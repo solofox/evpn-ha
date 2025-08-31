@@ -21,8 +21,12 @@ variable "vni" {
   default = 100  # VXLAN Network Identifier
 }
 
-variable "bgp_asn" {
+variable "bgp_asn1" {
   default = 65001  # BGP自治系统号
+}
+
+variable "bgp_asn2" {
+  default = 65002  # BGP自治系统号
 }
 
 # 数据源：获取可用区
@@ -162,13 +166,13 @@ bgpd=yes
 EOL
 
 cat >> /etc/frr/frr.conf << 'EOL'
-router bgp ${var.bgp_asn}
+router bgp ${var.bgp_asn1}
  bgp router-id 192.168.1.2
  bgp log-neighbor-changes
  no bgp default ipv4-unicast
  bgp cluster-id 192.168.1.2
  neighbor VTEPs peer-group
- neighbor VTEPs remote-as ${var.bgp_asn}
+ neighbor VTEPs remote-as ${var.bgp_asn1}
  neighbor VTEPs capability extend-nexthop
  ! clients
  bgp listen range 192.168.1.0/24 peer-group VTEPs
@@ -211,13 +215,13 @@ bgpd=yes
 EOL
 
 cat >> /etc/frr/frr.conf << 'EOL'
-router bgp ${var.bgp_asn}
+router bgp ${var.bgp_asn2}
  bgp router-id 192.168.2.2
  bgp log-neighbor-changes
  no bgp default ipv4-unicast
  bgp cluster-id 192.168.2.2
  neighbor VTEPs peer-group
- neighbor VTEPs remote-as ${var.bgp_asn}
+ neighbor VTEPs remote-as ${var.bgp_asn2}
  neighbor VTEPs capability extend-nexthop
  ! clients
  bgp listen range 192.168.2.0/24 peer-group VTEPs
@@ -250,10 +254,18 @@ resource "alicloud_instance" "server-l" {
   
   user_data = <<EOF
 #!/bin/bash
-set -e
+#set -e
 # 安装必要软件
 apt update -y
-apt install -y frr frr-pythontools
+pip install grpcio grpcio-tools pyroute2 --break-system-packages
+cd /root
+wget http://test20250830.oss-cn-beijing-internal.aliyuncs.com/gobgp_3.37.0_linux_amd64.tar.gz 
+wget http://test20250830.oss-cn-beijing-internal.aliyuncs.com/gobgp-api-proto.tar.gz 
+tar xf gobgp_3.37.0_linux_amd64.tar.gz
+mv ./gobgp ./gobgpd /usr/local/bin/
+(mkdir -p ./gobgp-api-proto/ && cd ./gobgp-api-proto/ && tar xf ../gobgp-api-proto.tar.gz)
+(cd ./gobgp-api-proto/api && python3 -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. *.proto)
+touch ./gobgp-api-proto/api/__init__.py
 
 echo "waiting for eth1"
 while ! (ip link show eth1); do 
@@ -271,47 +283,53 @@ ip link add vxlan0 type vxlan id ${var.vni} dstport 4789 nolearning
 ip link set vxlan0 master br-vxlan
 ip link set vxlan0 up
 
-# 配置FRR
-cat >> /etc/frr/daemons << 'EOL'
-bgpd=yes
-zebra=yes
+# 配置
+cat >> /root/gobgpd1.conf << 'EOL'
+[global.config]
+  as = 65001
+  router-id = "192.168.1.65" # 运行 GoBGP 的设备的 IP 地址
+  port = -1
+
+# 配置与 RR 的邻居关系
+[[neighbors]]
+  [neighbors.config]
+    neighbor-address = "192.168.1.2" # RR 的 IP 地址
+    peer-as = 65001                    # 与 RR 是 iBGP，AS 号相同
+  [neighbors.transport.config]
+    local-address = "192.168.1.65"     # 本机用于建立 BGP 会话的源 IP
+  # 启用 L2VPN EVPN 地址族
+  [[neighbors.afi-safis]]
+    [neighbors.afi-safis.config]
+      afi-safi-name = "l2vpn-evpn"
+    # (可选) 启用优雅重启
+    [neighbors.afi-safis.mp-graceful-restart.config]
+      enabled = true
+EOL
+cat >> /root/gobgpd2.conf << 'EOL'
+[global.config]
+  as = 65002
+  router-id = "192.168.2.65" # 运行 GoBGP 的设备的 IP 地址
+  port = -1
+
+# 配置与 RR 的邻居关系
+[[neighbors]]
+  [neighbors.config]
+    neighbor-address = "192.168.2.2" # RR 的 IP 地址
+    peer-as = 65002                    # 与 RR 是 iBGP，AS 号相同
+  [neighbors.transport.config]
+    local-address = "192.168.2.65"     # 本机用于建立 BGP 会话的源 IP
+  # 启用 L2VPN EVPN 地址族
+  [[neighbors.afi-safis]]
+    [neighbors.afi-safis.config]
+      afi-safi-name = "l2vpn-evpn"
+    # (可选) 启用优雅重启
+    [neighbors.afi-safis.mp-graceful-restart.config]
+      enabled = true
 EOL
 
-cat >> /etc/frr/frr.conf << 'EOL'
-! 禁用type3路由。这个VXLAN网络中无未知/隐藏的服务器，无需BUM处理。
-route-map NO_TYPE3 deny 10
- match evpn route-type 3
-route-map NO_TYPE3 permit 20
-! 主备，实际上不work
-route-map PRIMARY-LINK permit 10
- set local-preference 200
-route-map BACKUP-LINK permit 10
- set local-prefernce 100
-router bgp ${var.bgp_asn}
- bgp router-id 192.168.1.65
- ! bgp listen disable
- no bgp default ipv4-unicast
- neighbor RR peer-group
- neighbor RR remote-as ${var.bgp_asn}
- neighbor RR capability extend-nexthop
- neighbor RR timers 3 9
- ! neighbors
- neighbor 192.168.1.2 peer-group RR
- neighbor 192.168.2.2 peer-group RR
- address-family l2vpn evpn
-  neighbor RR route-map NO_TYPE3 out
-  neighbor 192.168.1.2 route-map PRIMARY-LINK in
-  neighbor 192.168.2.2 route-map BACKUP-LINK in
-  neighbor RR next-hop-self
-  neighbor RR activate
-  advertise-all-vni
-  advertise-svi-ip
- exit-address-family
-exit
-EOL
+screen -dmS gobgpd1 gobgpd -f /root/gobgpd1.conf -l verbose --api-hosts=127.0.0.1:50051
+screen -dmS gobgpd2 gobgpd -f /root/gobgpd2.conf -l verbose --api-hosts=127.0.0.1:50052
 
-systemctl enable frr
-systemctl restart frr
 EOF
 }
 
@@ -330,10 +348,18 @@ resource "alicloud_instance" "server-r" {
   
   user_data = <<EOF
 #!/bin/bash
-set -e
+#set -e
 # 安装必要软件
 apt update -y
-apt install -y frr frr-pythontools
+pip install grpcio grpcio-tools pyroute2 --break-system-packages
+cd /root
+wget http://test20250830.oss-cn-beijing-internal.aliyuncs.com/gobgp_3.37.0_linux_amd64.tar.gz 
+wget http://test20250830.oss-cn-beijing-internal.aliyuncs.com/gobgp-api-proto.tar.gz 
+tar xf gobgp_3.37.0_linux_amd64.tar.gz
+mv ./gobgp ./gobgpd /usr/local/bin/
+(mkdir -p ./gobgp-api-proto/ && cd ./gobgp-api-proto/ && tar xf ../gobgp-api-proto.tar.gz)
+(cd ./gobgp-api-proto/api && python3 -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. *.proto)
+touch ./gobgp-api-proto/api/__init__.py
 
 echo "waiting for eth1"
 while ! (ip link show eth1); do 
@@ -351,47 +377,53 @@ ip link add vxlan0 type vxlan id ${var.vni} dstport 4789 nolearning
 ip link set vxlan0 master br-vxlan
 ip link set vxlan0 up
 
-# 配置FRR
-cat >> /etc/frr/daemons << 'EOL'
-bgpd=yes
-zebra=yes
+# 配置
+cat >> /root/gobgpd1.conf << 'EOL'
+[global.config]
+  as = 65001
+  router-id = "192.168.1.87" # 运行 GoBGP 的设备的 IP 地址
+  port = -1
+
+# 配置与 RR 的邻居关系
+[[neighbors]]
+  [neighbors.config]
+    neighbor-address = "192.168.1.2" # RR 的 IP 地址
+    peer-as = 65001                    # 与 RR 是 iBGP，AS 号相同
+  [neighbors.transport.config]
+    local-address = "192.168.1.87"     # 本机用于建立 BGP 会话的源 IP
+  # 启用 L2VPN EVPN 地址族
+  [[neighbors.afi-safis]]
+    [neighbors.afi-safis.config]
+      afi-safi-name = "l2vpn-evpn"
+    # (可选) 启用优雅重启
+    [neighbors.afi-safis.mp-graceful-restart.config]
+      enabled = true
+EOL
+cat >> /root/gobgpd2.conf << 'EOL'
+[global.config]
+  as = 65002
+  router-id = "192.168.2.87" # 运行 GoBGP 的设备的 IP 地址
+  port = -1
+
+# 配置与 RR 的邻居关系
+[[neighbors]]
+  [neighbors.config]
+    neighbor-address = "192.168.2.2" # RR 的 IP 地址
+    peer-as = 65002                    # 与 RR 是 iBGP，AS 号相同
+  [neighbors.transport.config]
+    local-address = "192.168.2.87"     # 本机用于建立 BGP 会话的源 IP
+  # 启用 L2VPN EVPN 地址族
+  [[neighbors.afi-safis]]
+    [neighbors.afi-safis.config]
+      afi-safi-name = "l2vpn-evpn"
+    # (可选) 启用优雅重启
+    [neighbors.afi-safis.mp-graceful-restart.config]
+      enabled = true
 EOL
 
-cat >> /etc/frr/frr.conf << 'EOL'
-! 禁用type3路由。这个VXLAN网络中无未知/隐藏的服务器，无需BUM处理。
-route-map NO_TYPE3 deny 10
- match evpn route-type 3
-route-map NO_TYPE3 permit 20
-! 主备，实际上不work
-route-map PRIMARY-LINK permit 10
- set local-preference 200
-route-map BACKUP-LINK permit 10
- set local-prefernce 100
-router bgp ${var.bgp_asn}
- bgp router-id 192.168.1.87
- ! bgp listen disable
- no bgp default ipv4-unicast
- neighbor RR peer-group
- neighbor RR remote-as ${var.bgp_asn}
- neighbor RR capability extend-nexthop
- neighbor RR timers 3 9
- ! neighbors
- neighbor 192.168.1.2 peer-group RR
- neighbor 192.168.2.2 peer-group RR
- address-family l2vpn evpn
-  neighbor RR route-map NO_TYPE3 out
-  neighbor 192.168.1.2 route-map PRIMARY-LINK in
-  neighbor 192.168.2.2 route-map BACKUP-LINK in
-  neighbor RR next-hop-self
-  neighbor RR activate
-  advertise-all-vni
-  advertise-svi-ip
- exit-address-family
-exit
-EOL
+screen -dmS gobgpd1 gobgpd -f /root/gobgpd1.conf -l verbose --api-hosts=127.0.0.1:50051
+screen -dmS gobgpd2 gobgpd -f /root/gobgpd2.conf -l verbose --api-hosts=127.0.0.1:50052
 
-systemctl enable frr
-systemctl restart frr
 EOF
 }
 
@@ -420,4 +452,6 @@ resource "alicloud_network_interface_attachment" "server-r-eth1-attachment" {
   instance_id          = alicloud_instance.server-r.id
   network_interface_id = alicloud_network_interface.server-r-eth1.id
 }
+
+
 
