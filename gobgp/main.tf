@@ -297,6 +297,10 @@ cat >> /root/gobgpd1.conf << 'EOL'
     peer-as = 65001                    # 与 RR 是 iBGP，AS 号相同
   [neighbors.transport.config]
     local-address = "192.168.1.65"     # 本机用于建立 BGP 会话的源 IP
+  [neighbors.timers.config]
+    hold-time = 9                    # 默认 Hold Time (秒)
+    keepalive-interval = 3           # 默认 Keepalive Interval (秒)
+    connect-retry = 3                # 默认连接重试间隔 (秒)
   # 启用 L2VPN EVPN 地址族
   [[neighbors.afi-safis]]
     [neighbors.afi-safis.config]
@@ -318,6 +322,10 @@ cat >> /root/gobgpd2.conf << 'EOL'
     peer-as = 65002                    # 与 RR 是 iBGP，AS 号相同
   [neighbors.transport.config]
     local-address = "192.168.2.65"     # 本机用于建立 BGP 会话的源 IP
+  [neighbors.timers.config]
+    hold-time = 9                    # 默认 Hold Time (秒)
+    keepalive-interval = 3           # 默认 Keepalive Interval (秒)
+    connect-retry = 3                # 默认连接重试间隔 (秒)
   # 启用 L2VPN EVPN 地址族
   [[neighbors.afi-safis]]
     [neighbors.afi-safis.config]
@@ -391,6 +399,10 @@ cat >> /root/gobgpd1.conf << 'EOL'
     peer-as = 65001                    # 与 RR 是 iBGP，AS 号相同
   [neighbors.transport.config]
     local-address = "192.168.1.87"     # 本机用于建立 BGP 会话的源 IP
+  [neighbors.timers.config]
+    hold-time = 9                    # 默认 Hold Time (秒)
+    keepalive-interval = 3           # 默认 Keepalive Interval (秒)
+    connect-retry = 3                # 默认连接重试间隔 (秒)
   # 启用 L2VPN EVPN 地址族
   [[neighbors.afi-safis]]
     [neighbors.afi-safis.config]
@@ -412,6 +424,10 @@ cat >> /root/gobgpd2.conf << 'EOL'
     peer-as = 65002                    # 与 RR 是 iBGP，AS 号相同
   [neighbors.transport.config]
     local-address = "192.168.2.87"     # 本机用于建立 BGP 会话的源 IP
+  [neighbors.timers.config]
+    hold-time = 9                    # 默认 Hold Time (秒)
+    keepalive-interval = 3           # 默认 Keepalive Interval (秒)
+    connect-retry = 3                # 默认连接重试间隔 (秒)
   # 启用 L2VPN EVPN 地址族
   [[neighbors.afi-safis]]
     [neighbors.afi-safis.config]

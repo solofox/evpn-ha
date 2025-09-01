@@ -300,7 +300,8 @@ def handle_route_add_fdb(current_route: dict, available_routes: list[dict], is_b
         'ifindex': get_vxlan_port_index(),     # VXLAN 设备的索引
         'master': get_bridge_index(),    # 桥接设备的索引 (可选，但推荐)
         'vni': vni,              # VXLAN Network Identifier
-        'dst': vtep_ip           # 远程 VTEP 的 IP 地址
+        'dst': vtep_ip,           # 远程 VTEP 的 IP 地址
+        'flags': 0x22,
     }
 
     try:
@@ -339,9 +340,10 @@ def handle_route_add_fdb(current_route: dict, available_routes: list[dict], is_b
 
 def handle_route_del_neigh(current_route: dict, available_routes: [dict], is_best_route: bool):
     if available_routes:
-        return handle_route_add_neigh(available_routes[0], available_route, True)
+        return handle_route_add_neigh(available_routes[0], available_routes, True)
+    mac = current_route['mac']
     try:
-        ip.neigh('del', lladdr=mac, ifindex=bridge_idx)
+        ip.neigh('del', lladdr=mac, ifindex=get_bridge_index())
         logger.info(f"FDB deleted: {mac}")
     except Exception as e:
         logger.error(f"Failed to delete FDB {mac}: {e}")
@@ -349,14 +351,67 @@ def handle_route_del_neigh(current_route: dict, available_routes: [dict], is_bes
 
 def handle_route_del_fdb(current_route: dict, available_routes: [dict], is_best_route: bool):
     if available_routes:
-        return handle_route_add_fdb(available_routes[0], available_route, True)
+        return handle_route_add_fdb(available_routes[0], available_routes, True)
+    mac = current_route['mac']
     try:
-        ip.fdb('del', lladdr=mac, ifindex=bridge_idx)
+        ip.fdb('del', lladdr=mac, ifindex=get_vxlan_port_index(), dst=current_route['nexthop'])
         logger.info(f"FDB deleted: {mac}")
     except Exception as e:
         logger.error(f"Failed to delete FDB {mac}: {e}")
 
 
+def handle_route(destination):
+    nlri_data = parse_type2_nlri(destination.nlri)
+    nexthop = parse_nexthop(destination.pattrs)
+    logger.info(f"handle_route: nlri_data={nlri_data}, nexthop={nexthop}")
+    if not nlri_data or not nlri_data['mac'] or not nlri_data['rd'] or not nexthop:
+        logger.error(f"handle_route: incomplete route NLRI")
+        return
+    if nlri_data['vni'] != VNI:
+        return
+
+    mac = nlri_data['mac']
+    ip_addr = nlri_data['ip']
+    is_withdraw = destination.is_withdraw
+    route_key = get_route_key(nlri_data)
+    current_route = {'ip': nlri_data['ip'], 'mac': nlri_data['mac'], 'nexthop': nexthop, 'vni': nlri_data['vni'], 'rd': nlri_data['rd']}
+    # 计算 available_routes & is_best_route
+
+    # 这里简化：不区分本地路由，处理所有 Type-2
+    if is_withdraw:
+        # 撤销路由：删除 FDB
+        is_best_route = False
+        available_routes = REACHABLE_ROUTES.get(route_key, [])
+        if current_route in available_routes:
+            is_best_route = (current_route == available_routes[0])
+            available_routes.remove(current_route)
+            if not current_route:
+                REACHABLE_ROUTES.pop(route_key)
+        if current_route['rd'].startswith(ROUTER_ID1 + ":") or current_route['rd'].startswith(ROUTER_ID2 + ":"):
+            logger.info(f"ignore self route: {current_route}")
+            return
+        logger.info(f"withdraw route: current_route={current_route}, available_routes={available_routes}, is_best_route={is_best_route}")
+        handle_route_del_neigh(current_route, available_routes, is_best_route)
+        handle_route_del_fdb(current_route, available_routes, is_best_route)
+    else:
+        # 新增路由
+        if route_key not in REACHABLE_ROUTES:
+            available_routes = [current_route]
+            REACHABLE_ROUTES[route_key] = [current_route]
+            is_best_route = True
+        else:
+            available_routes = REACHABLE_ROUTES[route_key]
+            if current_route not in available_routes:
+                available_routes.append(current_route)
+                sort_routes(available_routes)
+            is_best_route = (current_route == available_routes[0])
+        if current_route['rd'].startswith(ROUTER_ID1 + ":") or current_route['rd'].startswith(ROUTER_ID2 + ":"):
+            logger.info(f"ignore self route: {current_route}")
+            return
+        logger.info(f"announce route: current_route={current_route}, available_routes={available_routes}, is_best_route={is_best_route}")
+        handle_route_add_neigh(current_route, available_routes, is_best_route)
+        handle_route_add_fdb(current_route, available_routes, is_best_route)
+        
 def stream_evpn_updates(endpoint: Dict[str, any], thread_strategy: str):
     """流式监听 BGP 更新的通用函数"""
     host = endpoint['host']
@@ -370,73 +425,59 @@ def stream_evpn_updates(endpoint: Dict[str, any], thread_strategy: str):
     channel = grpc.insecure_channel(f'{host}:{port}')
     stub = gobgp_pb2_grpc.GobgpApiStub(channel)
 
+    # try:
+    #     request = gobgp_pb2.ListPathRequest(
+    #         table_type=gobgp_pb2.GLOBAL,
+    #         family=gobgp_pb2.Family(afi=gobgp_pb2.Family.AFI_L2VPN, safi=gobgp_pb2.Family.SAFI_EVPN)
+    #     )
+    #     responses = stub.ListPath(request, metadata=[('better-call', 'gobgp')])
+
+    #     for response in responses:
+    #         for destination in response.destination.paths:
+    #             handle_route(destination)
+    # except grpc.RpcError as e:
+    #     logger.error(f"[{name}] gRPC stream error: {e.code()} - {e.details()}")
+    # except Exception as e:
+    #     logger.error(f"[{name}] Unexpected error in stream: {e}")
+    # finally:
+    #     channel.close()
     try:
-        request = gobgp_pb2.ListPathRequest(
-            table_type=gobgp_pb2.GLOBAL,
-            family=gobgp_pb2.Family(afi=gobgp_pb2.Family.AFI_L2VPN, safi=gobgp_pb2.Family.SAFI_EVPN)
+        request = gobgp_pb2.WatchEventRequest(
+            table=gobgp_pb2.WatchEventRequest.Table(
+                filters=[
+                    # 过滤器 1: 监听 BEST PATH (最佳路径) 变化
+                    gobgp_pb2.WatchEventRequest.Table.Filter(
+                        type=gobgp_pb2.WatchEventRequest.Table.Filter.BEST,
+                        init=True,  # 发送初始快照 (发送当前表中所有路由)
+                        # peer_address="",  # 留空表示所有 peer
+                        # peer_group="",    # 留空表示所有 peer group
+                    ),
+                    # (可选) 过滤器 2: 监听 EOR (End-of-RIB) 事件
+                    # gobgp_pb2.WatchEventRequest.Table.Filter(
+                    #     type=gobgp_pb2.WatchEventRequest.Table.Filter.EOR,
+                    #     init=False,
+                    # ),
+                ]
+            ),
+            # batch_size=0  # 0 表示不限制单个消息中的路径数量
+            batch_size=100  # 限制为 100 条路径/消息，避免单个消息过大
         )
-        responses = stub.ListPath(request, metadata=[('better-call', 'gobgp')])
+        responses = stub.WatchEvent(request, metadata=[('better-call', 'gobgp')])
 
         for response in responses:
-            for destination in response.destination.paths:
-                nlri_data = parse_type2_nlri(destination.nlri)
-                nexthop = parse_nexthop(destination.pattrs)
-                if not nlri_data or not nlri_data['mac']:
-                    continue
-                if nlri_data['vni'] != VNI:
-                    continue
-                if not nlri_data['rd']:
-                    continue
-                if not nexthop:
-                    continue
-
-                mac = nlri_data['mac']
-                ip_addr = nlri_data['ip']
-                is_withdraw = destination.is_withdraw
-                route_key = get_route_key(nlri_data)
-                current_route = {'ip': nlri_data['ip'], 'mac': nlri_data['mac'], 'nexthop': nexthop, 'vni': nlri_data['vni'], 'rd': nlri_data['rd']}
-                # 计算 available_routes & is_best_route
-
-                # 这里简化：不区分本地路由，处理所有 Type-2
-                if is_withdraw:
-                    # 撤销路由：删除 FDB
-                    is_best_route = False
-                    available_routes = REACHABLE_ROUTES.get(route_key, [])
-                    if current_route in available_routes:
-                        is_best_route = (current_route == available_routes[0])
-                        available_routes.remove(current_route)
-                        if not current_route:
-                            REACHABLE_ROUTES.pop(route_key)
-                    if current_route['rd'].startswith(ROUTER_ID1 + ":") or current_route['rd'].startswith(ROUTER_ID2 + ":"):
-                        logger.info(f"ignore self route: {current_route}")
-                        continue
-                    logger.info(f"withdraw route: current_route={current_route}, available_routes={available_routes}, is_best_route={is_best_route}")
-                    handle_route_del_neigh(current_route, available_routes, is_best_route)
-                    handle_route_del_fdb(current_route, available_routes, is_best_route)
-                else:
-                    # 新增路由
-                    if route_key not in REACHABLE_ROUTES:
-                        available_routes = [current_route]
-                        REACHABLE_ROUTES[route_key] = [current_route]
-                        is_best_route = True
-                    else:
-                        available_routes = REACHABLE_ROUTES[route_key]
-                        if current_route not in available_routes:
-                            available_routes.append(current_route)
-                            sort_routes(available_routes)
-                        is_best_route = (current_route == available_routes[0])
-                    if current_route['rd'].startswith(ROUTER_ID1 + ":") or current_route['rd'].startswith(ROUTER_ID2 + ":"):
-                        logger.info(f"ignore self route: {current_route}")
-                        continue
-                    logger.info(f"announce route: current_route={current_route}, available_routes={available_routes}, is_best_route={is_best_route}")
-                    handle_route_add_neigh(current_route, available_routes, is_best_route)
-                    handle_route_add_fdb(current_route, available_routes, is_best_route)
+            if not response.HasField('table'):
+                continue
+            if not response.table.paths:
+                continue
+            for destination in response.table.paths:
+                handle_route(destination)
     except grpc.RpcError as e:
         logger.error(f"[{name}] gRPC stream error: {e.code()} - {e.details()}")
     except Exception as e:
         logger.error(f"[{name}] Unexpected error in stream: {e}")
     finally:
         channel.close()
+
 
 
 def worker_thread(endpoint: Dict[str, any], thread_strategy: str):
