@@ -252,17 +252,17 @@ def handle_route_add_neigh(current_route: dict, available_routes: [dict], is_bes
     mac = current_route['mac']
     # --- 关键修改：添加必要的参数 ---
     # 构建 fdb 操作的参数字典
-    fdb_params = {
+    neigh_params = {
         'lladdr': mac,           # MAC 地址
         'ifindex': get_bridge_index(),    
-        'dst': ip_addr,          # 远程 VTEP 的 IP 地址
+        'dst': ip_addr,          # 远程业务地址
         'state': 'reachable',
         'nud': 'noarp',
     }
 
     try:
         # 1. ip add neigh
-        ip.neigh('add', **fdb_params)
+        ip.neigh('add', **neigh_params)
         logger.info(f"Added neighbor (add): {ip_addr} -> {mac}")
         return
     except Exception as e:
@@ -273,7 +273,7 @@ def handle_route_add_neigh(current_route: dict, available_routes: [dict], is_bes
                 return
             # replace 刷新
             try:
-                ip.neigh('replace', **fdb_params)
+                ip.neigh('replace', **neigh_params)
                 logger.info(f"Refreshed neighbor (replace): {ip_addr} -> {mac}")
             except Exception as e2:
                 logger.error(f"Failed to replace neighbor {ip_addr} -> {mac}: {e2}")
@@ -341,23 +341,34 @@ def handle_route_add_fdb(current_route: dict, available_routes: list[dict], is_b
 def handle_route_del_neigh(current_route: dict, available_routes: [dict], is_best_route: bool):
     if available_routes:
         return handle_route_add_neigh(available_routes[0], available_routes, True)
-    mac = current_route['mac']
+    neigh_params = {
+        'dst': current_route['ip'],          # 远程业务地址
+        'lladdr': current_route['mac'],           # MAC 地址
+        'ifindex': get_bridge_index(),    
+        'nud': 'noarp',
+    }
     try:
-        ip.neigh('del', lladdr=mac, ifindex=get_bridge_index())
-        logger.info(f"FDB deleted: {mac}")
+        ip.neigh('del', **neigh_params)
+        logger.info(f"Neigh deleted: {neigh_params}")
     except Exception as e:
-        logger.error(f"Failed to delete FDB {mac}: {e}")
+        logger.error(f"Failed to delete neigh {neigh_params}: {e}")
 
 
 def handle_route_del_fdb(current_route: dict, available_routes: [dict], is_best_route: bool):
     if available_routes:
         return handle_route_add_fdb(available_routes[0], available_routes, True)
-    mac = current_route['mac']
+    fdb_params = {
+        'lladdr': current_route['mac'],           # MAC 地址
+        'ifindex': get_vxlan_port_index(),     # VXLAN 设备的索引
+        'master': get_bridge_index(),    # 桥接设备的索引 (可选，但推荐)
+        'vni': current_route['vni'],              # VXLAN Network Identifier
+        'dst': current_route['nexthop'],           # 远程 VTEP 的 IP 地址
+    }
     try:
-        ip.fdb('del', lladdr=mac, ifindex=get_vxlan_port_index(), dst=current_route['nexthop'])
-        logger.info(f"FDB deleted: {mac}")
+        ip.fdb('del', **fdb_params)
+        logger.info(f"FDB deleted: {fdb_params}")
     except Exception as e:
-        logger.error(f"Failed to delete FDB {mac}: {e}")
+        logger.error(f"Failed to delete FDB {fdb_params}: {e}")
 
 
 def handle_route(destination):
