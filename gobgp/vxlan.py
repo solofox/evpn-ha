@@ -47,16 +47,55 @@ bridge_index = None
 
 vxlan_port_index = None
 
+class RouteEntry(object):
+    def __init__(self, *, ip : str, mac : str, nexthop : str, vni : int, rd : str, creator : str):
+        self._ip = ip
+        self._mac = mac
+        self._nexthop = nexthop
+        self._vni = vni
+        self._rd = rd
+        self._creator = creator
+    @property
+    def ip(self):
+        return self._ip
+    @property
+    def mac(self):
+        return self._mac
+    @property
+    def nexthop(self):
+        return self._nexthop
+    @property 
+    def vni(self):
+        return self._vni
+    @property
+    def rd(self):
+        return self._rd
+    @property
+    def creator(self):
+        return self._creator
+    def as_dict(self):
+        return {'ip': self.ip, 'mac': self.mac, 'nexthop': self.nexthop, 'vni': self.vni, 'rd': self.rd, 'creator': self.creator,}
+    def __eq__(self, other):
+        if not isinstance(other, RouteEntry):
+            return False
+        # ignore creator
+        return (self.ip == other.ip) and (self.mac == other.mac) and (self.nexthop == other.nexthop) and (self.vni == other.vni) and (self.rd == other.rd)
+    def __str__(self):
+        return f'{{"ip": "{self.ip}", "mac": "{self.mac}", "nexthop": "{self.nexthop}", "rd": "{self.rd}", "vni": {self.vni}, "creator": "{self.creator}"}}'
+    def __repr__(self):
+        return str(self)
+
+ROUTES_LOCK = threading.Lock()
 # key: "{vni}-{ip}"
-# value: [{"ip": "", "mac": "", "nexthop": "", "vni": "", "rd": ""}]
+# value: List[RouteEntry]
 REACHABLE_ROUTES = {}
 
 def get_route_key(type2route: dict) -> str:
     return "%s-%s" % (type2route['vni'], type2route['ip'])
 
-def sort_routes(routes: [dict]) -> None:
-    def sort_key(route: dict):
-        return (route['nexthop'], )
+def sort_routes(routes: [RouteEntry]) -> None:
+    def sort_key(route: RouteEntry):
+        return (route.nexthop, )
     return routes.sort(key=sort_key)
 
 def get_bridge_index() -> int:
@@ -151,8 +190,8 @@ def parse_rd(rd_any) -> Optional[str]:
     """
     # 定义可能的 RD 类型 URL 和对应的消息类
     RD_TYPES = {
-        "type.googleapis.com/apipb.RouteDistinguisherTwoOctetASN": attribute_pb2.RouteDistinguisherTwoOctetASN,
-        "type.googleapis.com/apipb.RouteDistinguisherIPAddress": attribute_pb2.RouteDistinguisherIPAddress,
+        "type.googleapis.com/apipb.RouteDistinguisherTwoOctetASN":  attribute_pb2.RouteDistinguisherTwoOctetASN,
+        "type.googleapis.com/apipb.RouteDistinguisherIPAddress":    attribute_pb2.RouteDistinguisherIPAddress,
         "type.googleapis.com/apipb.RouteDistinguisherFourOctetASN": attribute_pb2.RouteDistinguisherFourOctetASN,
     }
 
@@ -247,9 +286,9 @@ def parse_nexthop(pattrs) -> Optional[str]:
         logger.error(f"Error when handling pattrs: {e}")
         return None
 
-def handle_route_add_neigh(current_route: dict, available_routes: [dict], is_best_route: bool):
-    ip_addr = current_route['ip']
-    mac = current_route['mac']
+def handle_route_add_neigh(current_route: RouteEntry, available_routes: [RouteEntry], is_best_route: bool):
+    ip_addr = current_route.ip
+    mac = current_route.mac
     # --- 关键修改：添加必要的参数 ---
     # 构建 fdb 操作的参数字典
     neigh_params = {
@@ -280,18 +319,18 @@ def handle_route_add_neigh(current_route: dict, available_routes: [dict], is_bes
         else:
             logger.error(f"Failed to add neighbor {ip_addr} -> {mac}: {e}")
 
-def handle_route_add_fdb(current_route: dict, available_routes: list[dict], is_best_route: bool):
+def handle_route_add_fdb(current_route: RouteEntry, available_routes: list[RouteEntry], is_best_route: bool):
     """
     处理添加/更新 FDB 条目。用于 EVPN 场景。
 
     Args:
-        current_route (dict): 当前路由信息，包含 'mac', 'nexthop'(vtep), 'vni'。
-        available_routes (list[dict]): 同一 IP 的所有可用路由 (用于 ECMP 等场景，此处主要用于日志)。
+        current_route (RouteEntry): 当前路由信息，包含 'mac', 'nexthop'(vtep), 'vni'。
+        available_routes (list[RouteEntry]): 同一 IP 的所有可用路由 (用于 ECMP 等场景，此处主要用于日志)。
         is_best_route (bool): 是否是最佳路由。
     """
-    mac = current_route['mac']
-    vtep_ip = current_route['nexthop']  # 这是远程 VTEP 的 IP 地址
-    vni = current_route['vni']          # 这是 EVPN 实例的 VNI
+    mac = current_route.mac
+    vtep_ip = current_route.nexthop  # 这是远程 VTEP 的 IP 地址
+    vni = current_route.vni          # 这是 EVPN 实例的 VNI
 
     # --- 关键修改：添加必要的参数 ---
     # 构建 fdb 操作的参数字典
@@ -338,12 +377,12 @@ def handle_route_add_fdb(current_route: dict, available_routes: list[dict], is_b
             # 其他错误，如权限问题、参数无效等
             logger.error(f"Failed to add FDB entry for {mac}: {e}")
 
-def handle_route_del_neigh(current_route: dict, available_routes: [dict], is_best_route: bool):
+def handle_route_del_neigh(current_route: RouteEntry, available_routes: [RouteEntry], is_best_route: bool):
     if available_routes:
         return handle_route_add_neigh(available_routes[0], available_routes, True)
     neigh_params = {
-        'dst': current_route['ip'],          # 远程业务地址
-        'lladdr': current_route['mac'],           # MAC 地址
+        'dst': current_route.ip,          # 远程业务地址
+        'lladdr': current_route.mac,           # MAC 地址
         'ifindex': get_bridge_index(),    
         'nud': 'noarp',
     }
@@ -354,15 +393,15 @@ def handle_route_del_neigh(current_route: dict, available_routes: [dict], is_bes
         logger.error(f"Failed to delete neigh {neigh_params}: {e}")
 
 
-def handle_route_del_fdb(current_route: dict, available_routes: [dict], is_best_route: bool):
+def handle_route_del_fdb(current_route: RouteEntry, available_routes: [RouteEntry], is_best_route: bool):
     if available_routes:
         return handle_route_add_fdb(available_routes[0], available_routes, True)
     fdb_params = {
-        'lladdr': current_route['mac'],           # MAC 地址
+        'lladdr': current_route.mac,           # MAC 地址
         'ifindex': get_vxlan_port_index(),     # VXLAN 设备的索引
         'master': get_bridge_index(),    # 桥接设备的索引 (可选，但推荐)
-        'vni': current_route['vni'],              # VXLAN Network Identifier
-        'dst': current_route['nexthop'],           # 远程 VTEP 的 IP 地址
+        'vni': current_route.vni,              # VXLAN Network Identifier
+        'dst': current_route.nexthop,           # 远程 VTEP 的 IP 地址
     }
     try:
         ip.fdb('del', **fdb_params)
@@ -370,35 +409,19 @@ def handle_route_del_fdb(current_route: dict, available_routes: [dict], is_best_
     except Exception as e:
         logger.error(f"Failed to delete FDB {fdb_params}: {e}")
 
-
-def handle_route(destination):
-    nlri_data = parse_type2_nlri(destination.nlri)
-    nexthop = parse_nexthop(destination.pattrs)
-    logger.info(f"handle_route: nlri_data={nlri_data}, nexthop={nexthop}")
-    if not nlri_data or not nlri_data['mac'] or not nlri_data['rd'] or not nexthop:
-        logger.error(f"handle_route: incomplete route NLRI")
-        return
-    if nlri_data['vni'] != VNI:
-        return
-
-    mac = nlri_data['mac']
-    ip_addr = nlri_data['ip']
-    is_withdraw = destination.is_withdraw
-    route_key = get_route_key(nlri_data)
-    current_route = {'ip': nlri_data['ip'], 'mac': nlri_data['mac'], 'nexthop': nexthop, 'vni': nlri_data['vni'], 'rd': nlri_data['rd']}
-    # 计算 available_routes & is_best_route
-
+def handle_route_locked(is_withdraw : bool, current_route : RouteEntry) -> None:
     # 这里简化：不区分本地路由，处理所有 Type-2
+    route_key = get_route_key(current_route.as_dict())
+    is_best_route = False
     if is_withdraw:
         # 撤销路由：删除 FDB
-        is_best_route = False
         available_routes = REACHABLE_ROUTES.get(route_key, [])
         if current_route in available_routes:
             is_best_route = (current_route == available_routes[0])
             available_routes.remove(current_route)
             if not current_route:
                 REACHABLE_ROUTES.pop(route_key)
-        if current_route['rd'].startswith(ROUTER_ID1 + ":") or current_route['rd'].startswith(ROUTER_ID2 + ":"):
+        if current_route.rd.startswith(ROUTER_ID1 + ":") or current_route.rd.startswith(ROUTER_ID2 + ":"):
             logger.info(f"ignore self route: {current_route}")
             return
         logger.info(f"withdraw route: current_route={current_route}, available_routes={available_routes}, is_best_route={is_best_route}")
@@ -416,12 +439,29 @@ def handle_route(destination):
                 available_routes.append(current_route)
                 sort_routes(available_routes)
             is_best_route = (current_route == available_routes[0])
-        if current_route['rd'].startswith(ROUTER_ID1 + ":") or current_route['rd'].startswith(ROUTER_ID2 + ":"):
+        if current_route.rd.startswith(ROUTER_ID1 + ":") or current_route.rd.startswith(ROUTER_ID2 + ":"):
             logger.info(f"ignore self route: {current_route}")
             return
         logger.info(f"announce route: current_route={current_route}, available_routes={available_routes}, is_best_route={is_best_route}")
         handle_route_add_neigh(current_route, available_routes, is_best_route)
         handle_route_add_fdb(current_route, available_routes, is_best_route)
+        
+
+def parse_and_handle_route(destination, thread_strategy : str):
+    nlri_data = parse_type2_nlri(destination.nlri)
+    nexthop = parse_nexthop(destination.pattrs)
+    logger.info(f"handle_route: nlri_data={nlri_data}, nexthop={nexthop}")
+    if not nlri_data or not nlri_data['mac'] or not nlri_data['rd'] or not nexthop:
+        logger.error(f"handle_route: incomplete route NLRI")
+        return
+    if nlri_data['vni'] != VNI:
+        return
+
+    is_withdraw = destination.is_withdraw
+    current_route = RouteEntry(ip=nlri_data['ip'], mac=nlri_data['mac'], nexthop=nexthop, vni=nlri_data['vni'], 
+                                rd=nlri_data['rd'], creator=thread_strategy)
+    with ROUTES_LOCK:
+        handle_route_locked(is_withdraw, current_route)
         
 def stream_evpn_updates(endpoint: Dict[str, any], thread_strategy: str):
     """流式监听 BGP 更新的通用函数"""
@@ -436,23 +476,13 @@ def stream_evpn_updates(endpoint: Dict[str, any], thread_strategy: str):
     channel = grpc.insecure_channel(f'{host}:{port}')
     stub = gobgp_pb2_grpc.GobgpApiStub(channel)
 
-    # try:
-    #     request = gobgp_pb2.ListPathRequest(
-    #         table_type=gobgp_pb2.GLOBAL,
-    #         family=gobgp_pb2.Family(afi=gobgp_pb2.Family.AFI_L2VPN, safi=gobgp_pb2.Family.SAFI_EVPN)
-    #     )
-    #     responses = stub.ListPath(request, metadata=[('better-call', 'gobgp')])
-
-    #     for response in responses:
-    #         for destination in response.destination.paths:
-    #             handle_route(destination)
-    # except grpc.RpcError as e:
-    #     logger.error(f"[{name}] gRPC stream error: {e.code()} - {e.details()}")
-    # except Exception as e:
-    #     logger.error(f"[{name}] Unexpected error in stream: {e}")
-    # finally:
-    #     channel.close()
     try:
+        # 撤销路由表中本线程的路由
+        with ROUTES_LOCK:
+            for route_key in REACHABLE_ROUTES.keys():
+                routes_to_1ip = REACHABLE_ROUTES[route_key][::-1] # shallow copy
+                for route in routes_to_1ip:
+                    handle_route_locked(True, route)
         request = gobgp_pb2.WatchEventRequest(
             table=gobgp_pb2.WatchEventRequest.Table(
                 filters=[
@@ -481,11 +511,11 @@ def stream_evpn_updates(endpoint: Dict[str, any], thread_strategy: str):
             if not response.table.paths:
                 continue
             for destination in response.table.paths:
-                handle_route(destination)
+                parse_and_handle_route(destination, thread_strategy)
     except grpc.RpcError as e:
-        logger.error(f"[{name}] gRPC stream error: {e.code()} - {e.details()}")
+        logger.exception(f"[{name}] gRPC stream error: {e.code()} - {e.details()}")
     except Exception as e:
-        logger.error(f"[{name}] Unexpected error in stream: {e}")
+        logger.exception(f"[{name}] Unexpected error in stream: {e}")
     finally:
         channel.close()
 
@@ -502,7 +532,7 @@ def worker_thread(endpoint: Dict[str, any], thread_strategy: str):
             logger.info(f"[{endpoint['name']}] Shutdown requested.")
             break
         except Exception as e:
-            logger.error(f"[{endpoint['name']}] Connection failed: {e}. Reconnecting in 5 seconds...")
+            logger.exception(f"[{endpoint['name']}] Connection failed: {e}. Reconnecting in 5 seconds...")
             time.sleep(5)
 
 def announce_evpn_route(ip_addr: str, mac_addr: str, asn : int, vni: int, nexthop: str, api_port: int):
@@ -547,7 +577,7 @@ def announce_evpn_route(ip_addr: str, mac_addr: str, asn : int, vni: int, nextho
     except FileNotFoundError:
         logger.error("gobgp command not found. Please ensure gobgp is installed and in PATH.")
     except Exception as e:
-        logger.error(f"Unexpected error executing gobgp command: {e}")
+        logger.exception(f"Unexpected error executing gobgp command: {e}")
 
 def main():
     if len(sys.argv) != 3:
