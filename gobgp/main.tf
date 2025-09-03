@@ -259,9 +259,9 @@ resource "alicloud_instance" "server-l" {
 apt update -y
 pip install grpcio grpcio-tools pyroute2 --break-system-packages
 cd /root
-wget http://test20250830.oss-cn-beijing-internal.aliyuncs.com/gobgp_3.37.0_linux_amd64.tar.gz 
-wget http://test20250830.oss-cn-beijing-internal.aliyuncs.com/gobgp-api-proto.tar.gz 
-wget http://test20250830.oss-cn-beijing-internal.aliyuncs.com/vxlan.py
+wget 'https://raw.githubusercontent.com/solofox/evpn-ha/refs/heads/main/gobgp/gobgp_3.37.0_linux_amd64.tar.gz'
+wget 'https://raw.githubusercontent.com/solofox/evpn-ha/refs/heads/main/gobgp/gobgp-api-proto.tar.gz'
+wget 'https://raw.githubusercontent.com/solofox/evpn-ha/refs/heads/main/gobgp/vxlan.py'
 chmod +x ./vxlan.py
 tar xf gobgp_3.37.0_linux_amd64.tar.gz
 mv ./gobgp ./gobgpd /usr/local/bin/
@@ -364,9 +364,9 @@ resource "alicloud_instance" "server-r" {
 apt update -y
 pip install grpcio grpcio-tools pyroute2 --break-system-packages
 cd /root
-wget http://test20250830.oss-cn-beijing-internal.aliyuncs.com/gobgp_3.37.0_linux_amd64.tar.gz 
-wget http://test20250830.oss-cn-beijing-internal.aliyuncs.com/gobgp-api-proto.tar.gz 
-wget http://test20250830.oss-cn-beijing-internal.aliyuncs.com/vxlan.py
+wget 'https://raw.githubusercontent.com/solofox/evpn-ha/refs/heads/main/gobgp/gobgp_3.37.0_linux_amd64.tar.gz'
+wget 'https://raw.githubusercontent.com/solofox/evpn-ha/refs/heads/main/gobgp/gobgp-api-proto.tar.gz'
+wget 'https://raw.githubusercontent.com/solofox/evpn-ha/refs/heads/main/gobgp/vxlan.py'
 chmod +x ./vxlan.py
 tar xf gobgp_3.37.0_linux_amd64.tar.gz
 mv ./gobgp ./gobgpd /usr/local/bin/
