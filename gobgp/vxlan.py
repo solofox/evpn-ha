@@ -482,7 +482,8 @@ def stream_evpn_updates(endpoint: Dict[str, any], thread_strategy: str):
             for route_key in REACHABLE_ROUTES.keys():
                 routes_to_1ip = REACHABLE_ROUTES[route_key][::-1] # shallow copy
                 for route in routes_to_1ip:
-                    handle_route_locked(True, route)
+                    if route.creator == thread_strategy:
+                        handle_route_locked(True, route)
         request = gobgp_pb2.WatchEventRequest(
             table=gobgp_pb2.WatchEventRequest.Table(
                 filters=[
