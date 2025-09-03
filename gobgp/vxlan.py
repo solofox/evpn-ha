@@ -566,6 +566,7 @@ def announce_evpn_route(ip_addr: str, mac_addr: str, asn : int, vni: int, nextho
             logger.debug(f"gobgp stdout: {result.stdout.strip()}")
         if result.stderr:
             logger.warning(f"gobgp stderr: {result.stderr.strip()}")
+        logger.info(f"To Withdraw route: gobgp -p {api_port} global -a evpn rib del macadv {mac_addr} {ip_addr} rd {router_id}:{vni} etag 0 label {vni} nexthop {nexthop}")
     except subprocess.CalledProcessError as e:
         logger.error(f"Failed to announce EVPN route. Command: {' '.join(e.cmd)}")
         logger.error(f"Return code: {e.returncode}")
@@ -593,9 +594,16 @@ def main():
         ip_addr, mac_adr = ip_mac
         ROUTER_ID2 = ip_addr
 
-        print(f"""
+        # 1. 获取 br-vxlan 的 IP 和 MAC
+        ip_mac = get_bridge_ip_and_mac(BRIDGE_IFNAME)
+        if not ip_mac:
+            logger.error("Failed to get IP and MAC address for {BRIDGE_IFNAME}. Exiting.")
+            return
+        ip_addr, mac_addr = ip_mac
+
+        logger.info(f"""
 Configuration:
-BRIDGE_IFNAME   = "{BRIDGE_IFNAME}"
+BRIDGE_IFNAME   = "{BRIDGE_IFNAME}"       {ip_addr} {mac_addr}
 VXLAN_PORT_NAME = "{VXLAN_PORT_NAME}"
 ROUTER_DEV1     = "{ROUTER_DEV1}"
 ROUTER_DEV2     = "{ROUTER_DEV2}"
@@ -606,12 +614,6 @@ ROUTER_ID2      = "{ROUTER_ID2}
 VNI             = {VNI}                   
 """)
 
-        # 1. 获取 br-vxlan 的 IP 和 MAC
-        ip_mac = get_bridge_ip_and_mac(BRIDGE_IFNAME)
-        if not ip_mac:
-            logger.error("Failed to get IP and MAC address for {BRIDGE_IFNAME}. Exiting.")
-            return
-        ip_addr, mac_addr = ip_mac
         # 2. 宣告 EVPN 路由
         announce_evpn_route(ip_addr, mac_addr, ASN1, VNI, ROUTER_ID1, GRPC_ENDPOINTS[0]['port'])
         announce_evpn_route(ip_addr, mac_addr, ASN2, VNI, ROUTER_ID2, GRPC_ENDPOINTS[1]['port'])
