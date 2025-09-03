@@ -607,8 +607,7 @@ def main():
             return
         ip_addr, mac_addr = ip_mac
 
-        logger.info(f"""
-Configuration:
+        logger.info(f"""Configuration:
 BRIDGE_IFNAME   = "{BRIDGE_IFNAME}"       {ip_addr} {mac_addr}
 VXLAN_PORT_NAME = "{VXLAN_PORT_NAME}"
 ROUTER_DEV1     = "{ROUTER_DEV1}"

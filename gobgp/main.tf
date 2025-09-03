@@ -261,6 +261,8 @@ pip install grpcio grpcio-tools pyroute2 --break-system-packages
 cd /root
 wget http://test20250830.oss-cn-beijing-internal.aliyuncs.com/gobgp_3.37.0_linux_amd64.tar.gz 
 wget http://test20250830.oss-cn-beijing-internal.aliyuncs.com/gobgp-api-proto.tar.gz 
+wget http://test20250830.oss-cn-beijing-internal.aliyuncs.com/vxlan.py
+chmod +x ./vxlan.py
 tar xf gobgp_3.37.0_linux_amd64.tar.gz
 mv ./gobgp ./gobgpd /usr/local/bin/
 (mkdir -p ./gobgp-api-proto/ && cd ./gobgp-api-proto/ && tar xf ../gobgp-api-proto.tar.gz)
@@ -337,6 +339,7 @@ EOL
 
 screen -dmS gobgpd1 gobgpd -f /root/gobgpd1.conf -l verbose --api-hosts=127.0.0.1:50051
 screen -dmS gobgpd2 gobgpd -f /root/gobgpd2.conf -l verbose --api-hosts=127.0.0.1:50052
+screen -dmS vxlan.py bash -c '(export PYTHONPATH="$PYTHONPATH:/root/gobgp-api-proto/api" && cd /root && ./vxlan.py 2>&1)| tee vxlan.log'
 
 EOF
 }
@@ -363,6 +366,8 @@ pip install grpcio grpcio-tools pyroute2 --break-system-packages
 cd /root
 wget http://test20250830.oss-cn-beijing-internal.aliyuncs.com/gobgp_3.37.0_linux_amd64.tar.gz 
 wget http://test20250830.oss-cn-beijing-internal.aliyuncs.com/gobgp-api-proto.tar.gz 
+wget http://test20250830.oss-cn-beijing-internal.aliyuncs.com/vxlan.py
+chmod +x ./vxlan.py
 tar xf gobgp_3.37.0_linux_amd64.tar.gz
 mv ./gobgp ./gobgpd /usr/local/bin/
 (mkdir -p ./gobgp-api-proto/ && cd ./gobgp-api-proto/ && tar xf ../gobgp-api-proto.tar.gz)
@@ -439,6 +444,7 @@ EOL
 
 screen -dmS gobgpd1 gobgpd -f /root/gobgpd1.conf -l verbose --api-hosts=127.0.0.1:50051
 screen -dmS gobgpd2 gobgpd -f /root/gobgpd2.conf -l verbose --api-hosts=127.0.0.1:50052
+screen -dmS vxlan.py bash -c '(export PYTHONPATH="$PYTHONPATH:/root/gobgp-api-proto/api" && cd /root && ./vxlan.py 2>&1)| tee vxlan.log'
 
 EOF
 }
