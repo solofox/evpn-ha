@@ -11,6 +11,7 @@ from typing import Dict, Optional, Tuple
 
 import grpc
 from pyroute2 import IPRoute
+from pyroute2.netlink.rtnl import ndmsg
 
 # 假设你已经通过 protoc 生成了 GoBGP 的 Python gRPC 客户端
 # 下载或复制 GoBGP 的 proto 文件: https://github.com/osrg/gobgp/tree/master/api
@@ -293,6 +294,11 @@ def handle_route_add_neigh(current_route: RouteEntry, available_routes: [RouteEn
         'dst': ip_addr,          # 远程业务地址
         'state': 'reachable',
         'nud': 'noarp',
+        'attrs': [
+            ['NDA_PROTOCOL', 3],        # 3 代表 'zebra'
+            # 其他可能的值: 1=kernel, 2=redirect, 3=zebra, 4=static, 5=mld, 6=ndisc, 7=none
+        ],
+        'flags': ndmsg.NTF_EXT_LEARNED,
     }
 
     try:
@@ -334,9 +340,9 @@ def handle_route_add_fdb(current_route: RouteEntry, available_routes: list[Route
         'lladdr': mac,           # MAC 地址
         'ifindex': get_vxlan_port_index(),     # VXLAN 设备的索引
         'master': get_bridge_index(),    # 桥接设备的索引 (可选，但推荐)
-        'vni': vni,              # VXLAN Network Identifier
+        'vni': vni,               # VXLAN Network Identifier
         'dst': vtep_ip,           # 远程 VTEP 的 IP 地址
-        'flags': 0x22,
+        'flags': ndmsg.NTF_EXT_LEARNED | ndmsg.NTF_SELF, 
     }
 
     try:
