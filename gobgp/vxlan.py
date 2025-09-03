@@ -23,10 +23,13 @@ LOG_LEVEL = logging.INFO
 BRIDGE_IFNAME = 'br-vxlan'  # 本地桥接接口名称
 VXLAN_PORT_NAME = 'vxlan0'  # VTEP端口名称
 
+ROUTER_DEV1 = "eth0"
+ROUTER_DEV2 = "eth1"
+
 ASN1 = 65001                # GoBGP 实例的 AS 号
-ROUTER_ID1 = '192.168.1.65' # 本机 Router ID (用于 RD, GW-IP, Next-Hop)
+ROUTER_ID1 = None           # 本机 Router ID (用于 RD, GW-IP, Next-Hop)
 ASN2 = 65002                # GoBGP 实例的 AS 号
-ROUTER_ID2 = '192.168.2.65' # 本机 Router ID (用于 RD, GW-IP, Next-Hop)
+ROUTER_ID2 = None           # 本机 Router ID (用于 RD, GW-IP, Next-Hop)
 VNI = 100                   # VNI (用于 RD, RT, Label)
 
 # gRPC 端点
@@ -44,7 +47,6 @@ ip = IPRoute()
 
 # 桥接接口索引缓存
 bridge_index = None
-
 vxlan_port_index = None
 
 class RouteEntry(object):
@@ -145,7 +147,7 @@ def get_bridge_ip_and_mac(ifname: str) -> Optional[Tuple[str, str]]:
             return None
 
         # 获取 IP 地址 (只取主 IP，IPv4)
-        addrs = ipr.get_addr(ifname=ifname, family=2)  # AF_INET = 2
+        addrs = ipr.get_addr(index=links[0]['index'], family=2)  # AF_INET = 2
         ipv4_addr = None
         for addr in addrs:
             # 检查是否为主地址 (IFA_FLAGS 0 或没有 IFA_F_SECONDARY)
@@ -161,13 +163,7 @@ def get_bridge_ip_and_mac(ifname: str) -> Optional[Tuple[str, str]]:
             logger.warning(f"No primary IPv4 address found on interface '{ifname}'.")
             # 即使没有 IP，我们仍然可以宣告 MAC-only 路由
             # return (None, mac_addr) # 如果需要宣告 MAC-only，可以返回这个
-            # TODO: change this
-            if ROUTER_ID1 == '192.168.1.65':
-                ipv4_addr = '192.168.0.65'
-            elif ROUTER_ID1 == '192.168.1.87':
-                ipv4_addr = '192.168.0.87'
-            else:
-                return None
+            return None
 
         logger.info(f"Interface '{ifname}' - MAC: {mac_addr}, Primary IP: {ipv4_addr}")
         return (ipv4_addr, mac_addr)
@@ -581,20 +577,40 @@ def announce_evpn_route(ip_addr: str, mac_addr: str, asn : int, vni: int, nextho
         logger.exception(f"Unexpected error executing gobgp command: {e}")
 
 def main():
-    if len(sys.argv) != 3:
-        logger.error("not enough arguments")
-        return -1
-    global ROUTER_ID1, ROUTER_ID2
-    ROUTER_ID1 = sys.argv[1]
-    ROUTER_ID2 = sys.argv[2]
     """主函数：启动两个工作线程"""
     try:
+        global ROUTER_ID1, ROUTER_ID2
+        ip_mac = get_bridge_ip_and_mac(ROUTER_DEV1)
+        if not ip_mac:
+            logger.error("Failed to get IP and MAC address for {ROUTER_DEV1}. Exiting.")
+            return
+        ip_addr, mac_adr = ip_mac
+        ROUTER_ID1 = ip_addr
+        ip_mac = get_bridge_ip_and_mac(ROUTER_DEV2)
+        if not ip_mac:
+            logger.error("Failed to get IP and MAC address for {ROUTER_DEV2}. Exiting.")
+            return
+        ip_addr, mac_adr = ip_mac
+        ROUTER_ID2 = ip_addr
+
+        print(f"""
+Configuration:
+BRIDGE_IFNAME   = "{BRIDGE_IFNAME}"
+VXLAN_PORT_NAME = "{VXLAN_PORT_NAME}"
+ROUTER_DEV1     = "{ROUTER_DEV1}"
+ROUTER_DEV2     = "{ROUTER_DEV2}"
+ASN1            = {ASN1}               
+ROUTER_ID1      = "{ROUTER_ID1}"          
+ASN2            = {ASN2}                
+ROUTER_ID2      = "{ROUTER_ID2}         
+VNI             = {VNI}                   
+""")
+
         # 1. 获取 br-vxlan 的 IP 和 MAC
         ip_mac = get_bridge_ip_and_mac(BRIDGE_IFNAME)
         if not ip_mac:
-            logger.error("Failed to get IP and MAC address. Exiting.")
+            logger.error("Failed to get IP and MAC address for {BRIDGE_IFNAME}. Exiting.")
             return
-
         ip_addr, mac_addr = ip_mac
         # 2. 宣告 EVPN 路由
         announce_evpn_route(ip_addr, mac_addr, ASN1, VNI, ROUTER_ID1, GRPC_ENDPOINTS[0]['port'])
